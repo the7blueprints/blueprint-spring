@@ -59,6 +59,9 @@
                                     th:href="@{/mvc/groups/group-tracker}">Group Tracker</a></li>
                                 <li><a class="dropdown-item" 
                                     th:href="@{/mvc/person/cookie-clicker}">Cookie Clicker Game</a></li>
+                                <li><a class="dropdown-item"
+                                        sec:authorize="hasRole('ROLE_TEACHER') or hasRole('ROLE_ADMIN')"
+                                        th:href="@{/mvc/cs-pathway/read}">CS Pathway Scores</a></li>
                                 <li><a class="dropdown-item" sec:authorize="hasRole('ROLE_ADMIN')"
                                      th:href="@{/api/imports/backups}">Database Backups</a></li>
                                 <li><a class="dropdown-item" sec:authorize="hasRole('ROLE_ADMIN')"

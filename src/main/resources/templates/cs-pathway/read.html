@@ -1,0 +1,68 @@
+<!DOCTYPE HTML>
+<html xmlns:layout="http://www.w3.org/1999/xhtml" xmlns:th="http://www.w3.org/1999/xhtml"
+    layout:decorate="~{layouts/base}" lang="en">
+
+<!-- page style -->
+<th:block layout:fragment="style" th:remove="tag">
+    <style>
+        .small-cell { white-space: nowrap; }
+        .level-cell { min-width: 120px; }
+        .level-cell .progress { height: 6px; margin-top: 4px; background: #444; }
+        .level-cell .progress-bar { background: #4ecca3; }
+        /* Explicit colors: the site theme recolors Bootstrap's bg-* badge classes. */
+        .level-status { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+        .level-status.complete { background: #198754; color: #fff; }
+        .level-status.in-progress { background: #ffc107; color: #212529; }
+        .level-status.not-started { background: #6c757d; color: #fff; }
+    </style>
+</th:block>
+
+<!-- page title -->
+<th:block layout:fragment="title" th:remove="tag">CS Pathway Scores</th:block>
+
+<th:block layout:fragment="body" th:remove="tag">
+    <div sec:authorize="hasAnyRole('ROLE_ADMIN', 'ROLE_TEACHER')">
+        <div class="container">
+
+            <h3>CS Pathway Scores</h3>
+            <p class="text-muted">Each level's score is its percent complete. Students appear here once they make progress in the game.</p>
+
+            <div class="row align-items-md-stretch table-responsive">
+            <table id="csPathwayTable" class="table table-sm table-striped">
+                <thead>
+                    <tr>
+                        <th>Student</th>
+                        <th>UID</th>
+                        <th th:each="level : ${levels}" th:text="${level.displayName}">Level</th>
+                        <th>Average</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr th:each="row : ${rows}">
+                        <td class="small-cell" th:text="${row.name}">Name</td>
+                        <td class="small-cell" th:text="${row.uid}">UID</td>
+                        <td class="level-cell" th:each="score : ${row.levels}">
+                            <span th:text="${#numbers.formatDecimal(score.percentComplete, 1, 0)} + '%'">0%</span>
+                            <span th:if="${score.finished}" class="level-status complete">Complete</span>
+                            <span th:if="${!score.finished and score.percentComplete > 0}" class="level-status in-progress">In progress</span>
+                            <span th:if="${score.percentComplete == 0}" class="level-status not-started">Not started</span>
+                            <div class="progress">
+                                <div class="progress-bar" role="progressbar"
+                                    th:style="'width: ' + ${score.percentComplete} + '%'"
+                                    th:attr="aria-valuenow=${score.percentComplete}"
+                                    aria-valuemin="0" aria-valuemax="100"></div>
+                            </div>
+                        </td>
+                        <td class="small-cell" th:text="${#numbers.formatDecimal(row.averagePercent, 1, 0)} + '%'">0%</td>
+                    </tr>
+                    <tr th:if="${#lists.isEmpty(rows)}">
+                        <td th:colspan="${levels.length + 3}" class="text-center text-muted">No CS Pathway progress yet.</td>
+                    </tr>
+                </tbody>
+            </table>
+            </div>
+        </div>
+    </div>
+</th:block>
+
+</html>
