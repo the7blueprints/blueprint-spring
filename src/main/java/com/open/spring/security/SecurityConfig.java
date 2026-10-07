@@ -211,6 +211,14 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.POST, "/api/assignment-submissions/upload").permitAll()
                         // ==========================================
 
+                        // ========== CS PATHWAY SETUP REPORT ==========
+                        // A student's Terminal has no JWT cookie, so the report upload is public and
+                        // is tied to a student by the short-lived pairing code in its path. The
+                        // pairing-code rule comes FIRST (first match wins) so only signed-in users get codes.
+                        .requestMatchers(HttpMethod.POST, "/api/cs-pathway/setup-report/pairing-code").hasAnyAuthority("ROLE_USER", "ROLE_ADMIN", "ROLE_TEACHER", "ROLE_STUDENT")
+                        .requestMatchers(HttpMethod.POST, "/api/cs-pathway/setup-report/*").permitAll()
+                        // =============================================
+
                         // ========== OCS ANALYTICS ==========
                         // OCS Analytics endpoints - require authentication to associate data with user
                         .requestMatchers("/api/ocs-analytics/**").hasAnyAuthority("ROLE_USER", "ROLE_ADMIN", "ROLE_TEACHER", "ROLE_STUDENT")
@@ -260,6 +268,8 @@ public class SecurityConfig {
         policy.put("/api/face/**", "ROLE_TEACHER|ROLE_ADMIN");
         policy.put("POST /api/assignment-submissions/upload", "permitAll");
         policy.put("POST /api/assignments/auto-create", "ROLE_USER|ROLE_ADMIN|ROLE_TEACHER|ROLE_STUDENT|ROLE_ASSIGNMENT_SYNC");
+        policy.put("POST /api/cs-pathway/setup-report/pairing-code", "ROLE_USER|ROLE_ADMIN|ROLE_TEACHER|ROLE_STUDENT");
+        policy.put("POST /api/cs-pathway/setup-report/*", "permitAll");
         policy.put("/api/pausemenu/**", "permitAll");
         policy.put("/api/leaderboard/**", "permitAll");
         policy.put("/api/exports/**", "ROLE_ADMIN");

@@ -14,6 +14,10 @@
         .level-status.complete { background: #198754; color: #fff; }
         .level-status.in-progress { background: #ffc107; color: #212529; }
         .level-status.not-started { background: #6c757d; color: #fff; }
+        .level-status.setup-pass { background: #198754; color: #fff; }
+        .level-status.setup-warn { background: #ffc107; color: #212529; }
+        .level-status.setup-fail { background: #dc3545; color: #fff; }
+        .setup-report pre { max-width: 420px; max-height: 240px; overflow: auto; margin: 4px 0 0; font-size: 0.75rem; white-space: pre-wrap; }
     </style>
 </th:block>
 
@@ -25,7 +29,8 @@
         <div class="container">
 
             <h3>CS Pathway Scores</h3>
-            <p class="text-muted">Each level's score is its percent complete. Students appear here once they make progress in the game.</p>
+            <p class="text-muted">Each level's score is its percent complete. Students appear here once they make progress in the game.
+                Setup check is the latest result a student's own Terminal sent from Toolchain Trail; it is self-reported.</p>
 
             <div class="row align-items-md-stretch table-responsive">
             <table id="csPathwayTable" class="table table-sm table-striped">
@@ -35,6 +40,7 @@
                         <th>UID</th>
                         <th th:each="level : ${levels}" th:text="${level.displayName}">Level</th>
                         <th>Average</th>
+                        <th>Setup check</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -54,9 +60,20 @@
                             </div>
                         </td>
                         <td class="small-cell" th:text="${#numbers.formatDecimal(row.averagePercent, 1, 0)} + '%'">0%</td>
+                        <td class="setup-report" th:with="setup=${setupReports.get(row.uid)}">
+                            <span th:if="${setup == null}" class="text-muted">None</span>
+                            <details th:if="${setup != null}">
+                                <summary>
+                                    <span class="level-status" th:classappend="'setup-' + ${#strings.toLowerCase(setup.overall)}" th:text="${setup.overall}">PASS</span>
+                                    <span class="small-cell" th:text="${setup.passed} + ' pass, ' + ${setup.warned} + ' warn, ' + ${setup.failed} + ' fail'">0 pass</span>
+                                    <span class="small-cell text-muted" th:text="${#dates.format(setup.reportedAtDate, 'yyyy-MM-dd HH:mm')}">date</span>
+                                </summary>
+                                <pre th:text="${setup.report}">report</pre>
+                            </details>
+                        </td>
                     </tr>
                     <tr th:if="${#lists.isEmpty(rows)}">
-                        <td th:colspan="${levels.length + 3}" class="text-center text-muted">No CS Pathway progress yet.</td>
+                        <td th:colspan="${levels.length + 4}" class="text-center text-muted">No CS Pathway progress yet.</td>
                     </tr>
                 </tbody>
             </table>
