@@ -18,6 +18,12 @@
         .level-status.setup-warn { background: #ffc107; color: #212529; }
         .level-status.setup-fail { background: #dc3545; color: #fff; }
         .setup-report pre { max-width: 420px; max-height: 240px; overflow: auto; margin: 4px 0 0; font-size: 0.75rem; white-space: pre-wrap; }
+        .setup-review-result { max-width: 420px; margin-top: 6px; font-size: 0.85rem; white-space: pre-wrap; }
+        .setup-review-result ul { margin: 4px 0; padding-left: 20px; }
+        .review-status { font-weight: 700; }
+        .review-status.complete { color: #198754; }
+        .review-status.incomplete { color: #dc3545; }
+        .review-status.review-needed { color: #b58100; }
     </style>
 </th:block>
 
@@ -69,6 +75,9 @@
                                     <span class="small-cell text-muted" th:text="${#dates.format(setup.reportedAtDate, 'yyyy-MM-dd HH:mm')}">date</span>
                                 </summary>
                                 <pre th:text="${setup.report}">report</pre>
+                                <button type="button" class="btn btn-sm btn-outline-primary setup-review-button"
+                                    th:attr="data-review-uid=${row.uid}">AI review</button>
+                                <div class="setup-review-result" aria-live="polite"></div>
                             </details>
                         </td>
                     </tr>
@@ -78,8 +87,54 @@
                 </tbody>
             </table>
             </div>
+            <p class="small text-muted">AI reviews are advisory and assess only the submitted, self-reported output.</p>
         </div>
     </div>
+    <script>
+        document.querySelectorAll('.setup-review-button').forEach((button) => {
+            button.addEventListener('click', async () => {
+                const result = button.nextElementSibling;
+                button.disabled = true;
+                result.textContent = 'Reviewing submitted output...';
+                try {
+                    const response = await fetch(
+                        `/api/cs-pathway/setup-report/review/${encodeURIComponent(button.dataset.reviewUid)}`,
+                        { method: 'POST', headers: { 'Accept': 'application/json' } }
+                    );
+                    const body = await response.json();
+                    if (!response.ok) {
+                        throw new Error(body.error || `Review failed (${response.status}).`);
+                    }
+
+                    result.replaceChildren();
+                    const status = document.createElement('strong');
+                    status.className = `review-status ${body.status.toLowerCase().replaceAll('_', '-')}`;
+                    status.textContent = body.status.replaceAll('_', ' ');
+                    result.append(status, document.createTextNode(` — ${body.summary}`));
+                    [
+                        ['Missing or failed checks', body.missingItems],
+                        ['Warnings', body.warnings]
+                    ].forEach(([label, items]) => {
+                        if (items?.length) {
+                            const heading = document.createElement('div');
+                            heading.textContent = label;
+                            const list = document.createElement('ul');
+                            items.forEach((item) => {
+                                const entry = document.createElement('li');
+                                entry.textContent = item;
+                                list.append(entry);
+                            });
+                            result.append(heading, list);
+                        }
+                    });
+                } catch (error) {
+                    result.textContent = error.message || 'The review could not be completed.';
+                } finally {
+                    button.disabled = false;
+                }
+            });
+        });
+    </script>
 </th:block>
 
 </html>

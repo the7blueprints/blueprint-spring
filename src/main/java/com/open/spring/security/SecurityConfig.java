@@ -216,6 +216,7 @@ public class SecurityConfig {
                         // is tied to a student by the short-lived pairing code in its path. The
                         // pairing-code rule comes FIRST (first match wins) so only signed-in users get codes.
                         .requestMatchers(HttpMethod.POST, "/api/cs-pathway/setup-report/pairing-code").hasAnyAuthority("ROLE_USER", "ROLE_ADMIN", "ROLE_TEACHER", "ROLE_STUDENT")
+                        .requestMatchers(HttpMethod.POST, "/api/cs-pathway/setup-report/review/**").hasAnyAuthority("ROLE_ADMIN", "ROLE_TEACHER")
                         .requestMatchers(HttpMethod.POST, "/api/cs-pathway/setup-report/*").permitAll()
                         // =============================================
 
@@ -269,6 +270,7 @@ public class SecurityConfig {
         policy.put("POST /api/assignment-submissions/upload", "permitAll");
         policy.put("POST /api/assignments/auto-create", "ROLE_USER|ROLE_ADMIN|ROLE_TEACHER|ROLE_STUDENT|ROLE_ASSIGNMENT_SYNC");
         policy.put("POST /api/cs-pathway/setup-report/pairing-code", "ROLE_USER|ROLE_ADMIN|ROLE_TEACHER|ROLE_STUDENT");
+        policy.put("POST /api/cs-pathway/setup-report/review/**", "ROLE_ADMIN|ROLE_TEACHER");
         policy.put("POST /api/cs-pathway/setup-report/*", "permitAll");
         policy.put("/api/pausemenu/**", "permitAll");
         policy.put("/api/leaderboard/**", "permitAll");

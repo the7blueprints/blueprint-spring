@@ -2,6 +2,7 @@ package com.open.spring.mvc.cspathway;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.NoSuchElementException;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -25,9 +26,13 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/cs-pathway/setup-report")
 public class CsPathwaySetupReportApiController {
     private final CsPathwaySetupReportService reportService;
+    private final CsPathwaySetupReportReviewService reviewService;
 
-    public CsPathwaySetupReportApiController(CsPathwaySetupReportService reportService) {
+    public CsPathwaySetupReportApiController(
+            CsPathwaySetupReportService reportService,
+            CsPathwaySetupReportReviewService reviewService) {
         this.reportService = reportService;
+        this.reviewService = reviewService;
     }
 
     /** POST /api/cs-pathway/setup-report/pairing-code - a code for the signed-in student's verify command. */
@@ -69,5 +74,17 @@ public class CsPathwaySetupReportApiController {
         body.put("overall", report == null ? null : report.getOverall());
         body.put("reportedAt", report == null ? null : report.getReportedAt());
         return ResponseEntity.ok(body);
+    }
+
+    /** POST /api/cs-pathway/setup-report/review/{uid} - AI review for admin/teacher use. */
+    @PostMapping("/review/{uid}")
+    public ResponseEntity<?> reviewReport(@PathVariable String uid) {
+        try {
+            return ResponseEntity.ok(reviewService.review(uid));
+        } catch (NoSuchElementException error) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("error", error.getMessage()));
+        } catch (IllegalStateException error) {
+            return ResponseEntity.status(HttpStatus.BAD_GATEWAY).body(Map.of("error", error.getMessage()));
+        }
     }
 }
