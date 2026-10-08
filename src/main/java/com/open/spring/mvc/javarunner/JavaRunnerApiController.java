@@ -1,112 +1,116 @@
 package com.open.spring.mvc.javarunner;
 
+import org.springframework.web.client.RestClient;
+
+import io.github.cdimascio.dotenv.Dotenv;
+
+import org.springframework.core.ParameterizedTypeReference;
+import org.springframework.http.MediaType;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-import java.io.*;
-import java.nio.file.*;
-import java.util.*;
+
+import java.util.Map;
 
 @RestController
 @RequestMapping("/run")
-@CrossOrigin(origins = {"http://127.0.0.1:4500","https://pages.opencodingsociety.com"}, allowCredentials = "true")
 public class JavaRunnerApiController {
 
-    // Blacklist dangerous classes and methods
-    private static final String[] FORBIDDEN_KEYWORDS = {
-        "System.exit", "Runtime.getRuntime", "ProcessBuilder",
-        "File", "FileReader", "FileWriter", "RandomAccessFile",
-        "socket", "ServerSocket", "DatagramSocket",
-        "URLConnection", "HttpURLConnection",
-        "reflection", "invoke", "getDeclaredMethod", "getDeclaredField",
-        "ClassLoader", "defineClass", "forName",
-        "SecurityManager", "setSecurityManager",
-        "Thread", "ThreadGroup", "sleep", "interrupt"
-    };
+    private final LocalJavaRunner localJavaRunner;
+    private final RestClient restClient;
+    private final boolean isProduction;
+    private final String runnerUrl;
 
-    private static final long TIMEOUT_MS = 3000; // 3-second timeout
+    public JavaRunnerApiController(RestClient.Builder builder, LocalJavaRunner localJavaRunner) {
+        this.restClient = builder.build();
+        this.localJavaRunner = localJavaRunner;
+
+        Dotenv dotenv = Dotenv.configure()
+                .ignoreIfMissing()
+                .load();
+
+        String productionValue = System.getenv("IS_PRODUCTION");
+
+        if (productionValue == null) {
+                productionValue = dotenv.get(
+                        "IS_PRODUCTION",
+                        "false"
+                );
+        }
+
+        this.isProduction = Boolean.parseBoolean(
+                productionValue
+        );
+
+        String configuredRunnerUrl =
+                System.getenv("JAVA_RUNNER_URL");
+
+        if (configuredRunnerUrl == null) {
+                configuredRunnerUrl = dotenv.get(
+                        "JAVA_RUNNER_URL",
+                        "http://code_runner:8592"
+                );
+        }
+
+        this.runnerUrl = configuredRunnerUrl;
+
+    }
 
     @PostMapping("/java")
-    public ResponseEntity<Map<String, String>> runJava(@RequestBody Map<String, String> body) {
-        String code = body.get("code");
-        if (code == null || code.trim().isEmpty()) {
-            return new ResponseEntity<>(Map.of("output", "No code provided."), HttpStatus.BAD_REQUEST);
+    public ResponseEntity<Map<String, String>> runJava(
+            @RequestBody Map<String, String> body) {
+
+        if (isProduction) {
+            return runInDocker(body);
         }
 
-        // Check for forbidden keywords (case-insensitive)
-        String codeUpper = code.toUpperCase();
-        for (String keyword : FORBIDDEN_KEYWORDS) {
-            if (codeUpper.contains(keyword.toUpperCase())) {
-                return new ResponseEntity<>(Map.of("output", "Code contains forbidden operation: " + keyword), HttpStatus.BAD_REQUEST);
-            }
-        }
+        return runLocally(body);
+    }
+
+    private ResponseEntity<Map<String, String>> runInDocker(
+            Map<String, String> body) {
 
         try {
-            // Extract class name from code
-            String className = extractClassName(code);
-            if (className == null) {
-                return new ResponseEntity<>(Map.of("output", "No public class found in code."), HttpStatus.BAD_REQUEST);
-            }
+            Map<String, String> response =
+                    restClient.post()
+                            .uri(runnerUrl + "/java")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .body(body)
+                            .retrieve()
+                            .body(new ParameterizedTypeReference<>() {});
 
-            // Create a temporary directory and file
-            Path tempDir = Files.createTempDirectory("java-run-");
-            Path javaFile = tempDir.resolve(className + ".java");
-            Files.writeString(javaFile, code);
-
-            // Step 1: Compile Java code
-            Process compileProcess = new ProcessBuilder("javac", javaFile.toString())
-                    .directory(tempDir.toFile())
-                    .redirectErrorStream(true)
-                    .start();
-
-            String compileOutput = new String(compileProcess.getInputStream().readAllBytes());
-            compileProcess.waitFor();
-
-            if (compileProcess.exitValue() != 0) {
-                cleanup(tempDir);
-                return new ResponseEntity<>(Map.of("output", "Compilation error:\n" + compileOutput), HttpStatus.OK);
-            }
-
-            // Step 2: Run compiled Java code
-            Process runProcess = new ProcessBuilder("java", "-cp", tempDir.toString(), className)
-                    .redirectErrorStream(true)
-                    .start();
-
-            boolean finished = runProcess.waitFor(TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
-            String runOutput = new String(runProcess.getInputStream().readAllBytes());
-
-            if (!finished) {
-                runProcess.destroyForcibly();
-                cleanup(tempDir);
-                return new ResponseEntity<>(Map.of("output", "Execution timed out (" + (TIMEOUT_MS / 1000) + "s limit)."), HttpStatus.OK);
-            }
-
-            cleanup(tempDir);
-            return new ResponseEntity<>(Map.of("output", runOutput), HttpStatus.OK);
+            return ResponseEntity.ok(response);
 
         } catch (Exception e) {
-            return new ResponseEntity<>(Map.of("output", "Error running code: " + e.getMessage()), HttpStatus.INTERNAL_SERVER_ERROR);
+            return ResponseEntity
+                    .status(HttpStatus.BAD_GATEWAY)
+                    .body(Map.of(
+                            "output",
+                            "Could not connect to Java runner: "
+                                    + e.getMessage()
+                    ));
         }
     }
 
-    // Helper: extract public class name from code
-    private String extractClassName(String code) {
-        java.util.regex.Pattern pattern = java.util.regex.Pattern.compile("public\\s+class\\s+(\\w+)");
-        java.util.regex.Matcher matcher = pattern.matcher(code);
-        if (matcher.find()) {
-            return matcher.group(1);
-        }
-        return null;
-    }
+    private ResponseEntity<Map<String, String>> runLocally(
+            Map<String, String> body) {
 
-    // Helper: safely delete temporary files
-    private void cleanup(Path dir) {
         try {
-            Files.walk(dir)
-                .sorted(Comparator.reverseOrder())
-                .forEach(path -> {
-                    try { Files.delete(path); } catch (IOException ignored) {}
-                });
-        } catch (IOException ignored) {}
+            String output = localJavaRunner.run(body);
+
+            return ResponseEntity.ok(Map.of(
+                    "output",
+                    output
+            ));
+
+        } catch (Exception e) {
+            return ResponseEntity
+                    .status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of(
+                            "output",
+                            "Could not run Java locally: "
+                                    + e.getMessage()
+                    ));
+        }
     }
 }

@@ -1,0 +1,4 @@
+mvnw text eol=lf
+*.sh text eol=lf
+Dockerfile text eol=lf
+runner/Dockerfile text eol=lf

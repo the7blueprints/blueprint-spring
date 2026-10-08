@@ -1,11 +1,21 @@
-version: '3'
 services:
   web:
     image: java_springv1
+    env_file:
+      - .env
     build: .
     ports:
       - "8585:8585"
       - "8589:8589"
     volumes:
        - ./volumes:/app/volumes
+    restart: unless-stopped
+
+  code_runner:
+    image: spring_runner
+    build: ./runner
+    expose:
+      - "8592"
+    cap_drop:
+      - ALL
     restart: unless-stopped
