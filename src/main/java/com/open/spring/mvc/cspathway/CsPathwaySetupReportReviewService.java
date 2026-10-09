@@ -6,6 +6,7 @@ import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.net.http.HttpTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
@@ -15,6 +16,8 @@ import java.util.LinkedHashSet;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -30,6 +33,25 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 @Service
 public class CsPathwaySetupReportReviewService {
     private static final Pattern WARN_OR_FAIL_LINE = Pattern.compile("(?m)^\\[(WARN|FAIL)]\\s+(.+?)\\s*$");
+    // Gemini's thinking models can take well over 30s when the service is under load.
+    private static final Duration GEMINI_REQUEST_TIMEOUT = Duration.ofSeconds(60);
+    // 429/503 and timeouts are usually short demand spikes, so a couple of retries often succeed.
+    private static final int GEMINI_MAX_ATTEMPTS = 3;
+    private static final Duration GEMINI_RETRY_DELAY = Duration.ofSeconds(2);
+    private static final Logger logger = LoggerFactory.getLogger(CsPathwaySetupReportReviewService.class);
+    private static final List<String> REVIEW_STATUSES = List.of("COMPLETE", "INCOMPLETE", "REVIEW_NEEDED");
+    // Gemini JSON mode: the model must answer with exactly this shape, so it cannot wrap
+    // the review in prose or code fences, rename fields, or invent statuses.
+    private static final Map<String, Object> REVIEW_RESPONSE_SCHEMA = Map.of(
+            "type", "OBJECT",
+            "properties", Map.of(
+                    "status", Map.of("type", "STRING", "enum", REVIEW_STATUSES),
+                    "summary", Map.of("type", "STRING"),
+                    "missingItems", Map.of("type", "ARRAY", "items", Map.of("type", "STRING")),
+                    "warnings", Map.of("type", "ARRAY", "items", Map.of("type", "STRING"))),
+            "required", List.of("status", "summary", "missingItems", "warnings"),
+            "propertyOrdering", List.of("status", "summary", "missingItems", "warnings"));
+    private static final int LOGGED_ANSWER_LENGTH = 500;
 
     private final CsPathwaySetupReportService reportService;
     private final ObjectMapper objectMapper;
@@ -58,9 +80,8 @@ public class CsPathwaySetupReportReviewService {
 
         String prompt = buildPrompt(report);
         try {
-            JsonNode response = objectMapper.readTree(callGemini(prompt));
-            String text = response.path("candidates").path(0).path("content").path("parts").path(0)
-                    .path("text").asText("").trim();
+            JsonNode response = objectMapper.readTree(callGeminiWithRetries(prompt));
+            String text = readAnswerText(response);
             if (text.isBlank()) {
                 throw new IllegalStateException("The AI returned no review.");
             }
@@ -69,9 +90,26 @@ public class CsPathwaySetupReportReviewService {
         } catch (InterruptedException error) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("The AI review was interrupted.", error);
+        } catch (HttpTimeoutException error) {
+            logger.warn("Setup report AI review for {} timed out after {} attempts", uid, GEMINI_MAX_ATTEMPTS);
+            throw new IllegalStateException("The AI took too long to answer. Try again in a minute.", error);
+        } catch (JsonProcessingException error) {
+            logger.warn("Setup report AI review for {} returned unreadable JSON: {}", uid, error.getOriginalMessage());
+            throw new IllegalStateException("The AI returned an invalid review format.", error);
         } catch (IOException error) {
-            throw new IllegalStateException("The AI review could not be completed.", error);
+            logger.warn("Setup report AI review for {} could not reach Gemini: {}", uid, error.toString());
+            throw new IllegalStateException("Could not reach the AI service: " + error.getMessage(), error);
         }
+    }
+
+    /** The first non-thought text part; thinking models may put their reasoning in earlier parts. */
+    private static String readAnswerText(JsonNode response) {
+        for (JsonNode part : response.path("candidates").path(0).path("content").path("parts")) {
+            if (!part.path("thought").asBoolean(false) && part.hasNonNull("text")) {
+                return part.path("text").asText("").trim();
+            }
+        }
+        return "";
     }
 
     private String buildPrompt(CsPathwaySetupReport report) {
@@ -103,23 +141,40 @@ public class CsPathwaySetupReportReviewService {
     }
 
     private CsPathwaySetupReportReview parseReview(String text) throws JsonProcessingException {
-        String json = text;
-        if (json.startsWith("```")) {
-            json = json.replaceFirst("^```(?:json)?\\s*", "").replaceFirst("\\s*```$", "");
+        JsonNode node;
+        try {
+            node = objectMapper.readTree(extractJsonObject(text));
+        } catch (JsonProcessingException error) {
+            logger.warn("AI review answer is not JSON: {}", abbreviate(text));
+            throw error;
         }
-        JsonNode node = objectMapper.readTree(json);
-        String status = node.path("status").asText("");
+        String status = node.path("status").asText("").trim().toUpperCase(java.util.Locale.ROOT);
         String summary = node.path("summary").asText("").trim();
         List<String> missingItems = readStringList(node.path("missingItems"));
         List<String> warnings = readStringList(node.path("warnings"));
 
-        if (!List.of("COMPLETE", "INCOMPLETE", "REVIEW_NEEDED").contains(status)
+        if (!REVIEW_STATUSES.contains(status)
                 || summary.isBlank()
                 || missingItems == null
                 || warnings == null) {
+            logger.warn("AI review answer has the wrong fields: {}", abbreviate(text));
             throw new IllegalStateException("The AI returned an invalid review format.");
         }
         return new CsPathwaySetupReportReview(status, summary, missingItems, warnings);
+    }
+
+    /**
+     * JSON mode should return a bare object, but models without it (another gemini.api.url)
+     * may wrap it in a code fence or a sentence, so keep only the outermost {...}.
+     */
+    private static String extractJsonObject(String text) {
+        int start = text.indexOf('{');
+        int end = text.lastIndexOf('}');
+        return start >= 0 && end > start ? text.substring(start, end + 1) : text;
+    }
+
+    private static String abbreviate(String text) {
+        return text.length() <= LOGGED_ANSWER_LENGTH ? text : text.substring(0, LOGGED_ANSWER_LENGTH) + "...";
     }
 
     private List<String> readStringList(JsonNode node) {
@@ -168,22 +223,57 @@ public class CsPathwaySetupReportReviewService {
                 List.copyOf(warnings));
     }
 
-    private String callGemini(String prompt) throws IOException, InterruptedException {
+    private String callGeminiWithRetries(String prompt) throws IOException, InterruptedException {
+        for (int attempt = 1; ; attempt++) {
+            boolean lastAttempt = attempt == GEMINI_MAX_ATTEMPTS;
+            try {
+                HttpResponse<String> response = callGemini(prompt);
+                int status = response.statusCode();
+                if (status >= 200 && status < 300) {
+                    return response.body();
+                }
+                if (lastAttempt || !isTemporaryFailure(status)) {
+                    logger.warn("Gemini returned HTTP {} on attempt {}", status, attempt);
+                    throw new IllegalStateException(describeHttpFailure(status));
+                }
+            } catch (HttpTimeoutException error) {
+                if (lastAttempt) {
+                    throw error;
+                }
+            }
+            Thread.sleep(GEMINI_RETRY_DELAY.toMillis());
+        }
+    }
+
+    private static boolean isTemporaryFailure(int status) {
+        return status == 429 || status == 500 || status == 503;
+    }
+
+    private static String describeHttpFailure(int status) {
+        return switch (status) {
+            case 429, 503 -> "The AI service is busy right now (Gemini returned HTTP " + status + "). Try again in a minute.";
+            case 400 -> "Gemini rejected the request (HTTP 400). Check gemini.api.url and the model name.";
+            case 401, 403 -> "Gemini refused the API key (HTTP " + status + "). Check GEMINI_API_KEY on the server.";
+            case 404 -> "Gemini could not find the model (HTTP 404). Check gemini.api.url.";
+            default -> "Gemini returned HTTP " + status + ".";
+        };
+    }
+
+    private HttpResponse<String> callGemini(String prompt) throws IOException, InterruptedException {
         Map<String, Object> requestBody = Map.of(
                 "contents", List.of(Map.of("parts", List.of(Map.of("text", prompt)))),
-                "generationConfig", Map.of("temperature", 0.1));
+                "generationConfig", Map.of(
+                        "temperature", 0.1,
+                        "responseMimeType", "application/json",
+                        "responseSchema", REVIEW_RESPONSE_SCHEMA));
         String querySeparator = geminiApiUrl.contains("?") ? "&" : "?";
         URI uri = URI.create(geminiApiUrl + querySeparator + "key="
                 + URLEncoder.encode(geminiApiKey, StandardCharsets.UTF_8));
         HttpRequest request = HttpRequest.newBuilder(uri)
-                .timeout(Duration.ofSeconds(30))
+                .timeout(GEMINI_REQUEST_TIMEOUT)
                 .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(requestBody)))
                 .build();
-        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-        if (response.statusCode() < 200 || response.statusCode() >= 300) {
-            throw new IllegalStateException("Gemini returned HTTP " + response.statusCode() + ".");
-        }
-        return response.body();
+        return httpClient.send(request, HttpResponse.BodyHandlers.ofString());
     }
 }
