@@ -10,6 +10,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.HashMap;
@@ -32,6 +33,9 @@ import com.open.spring.mvc.toolchain.ToolchainController.StartResponse;
 
 class ToolchainServiceTest {
     private static final Instant NOW = Instant.parse("2026-10-14T18:00:00Z");
+    // Deliberately different from application.properties, to prove the service uses what it is given.
+    private static final Duration PAIRING_CODE_LIFETIME = Duration.ofMinutes(7);
+    private static final Duration AGENT_TOKEN_LIFETIME = Duration.ofHours(3);
 
     @Mock
     private ToolchainSessionRepository repository;
@@ -45,7 +49,7 @@ class ToolchainServiceTest {
     void setUp() {
         MockitoAnnotations.openMocks(this);
         clock = new MutableClock(NOW);
-        service = new ToolchainService(repository, new ToolchainStations(), clock);
+        service = new ToolchainService(repository, new ToolchainStations(), clock, PAIRING_CODE_LIFETIME, AGENT_TOKEN_LIFETIME);
 
         when(repository.save(any(ToolchainSession.class))).thenAnswer(invocation -> {
             ToolchainSession row = invocation.getArgument(0);
@@ -77,7 +81,7 @@ class ToolchainServiceTest {
         assertEquals("git-village-hall", row.getStationId());
         assertNotEquals(started.pairingCode(), row.getPairingCodeHash());
         assertEquals(ToolchainService.sha256(started.pairingCode()), row.getPairingCodeHash());
-        assertEquals(NOW.plusSeconds(300), started.expiresAt());
+        assertEquals(NOW.plus(PAIRING_CODE_LIFETIME), started.expiresAt());
         assertTrue(started.pairingCode().length() >= 40);
     }
 
@@ -103,7 +107,7 @@ class ToolchainServiceTest {
     @Test
     void expiredPairingCodeIsRejectedAndReportedAsExpired() {
         StartResponse started = service.start("toby", "git-village-hall");
-        clock.advanceSeconds(301);
+        clock.advanceSeconds(PAIRING_CODE_LIFETIME.toSeconds() + 1);
 
         assertThrows(ResponseStatusException.class, () -> service.pair(started.pairingCode()));
         assertEquals(ToolchainSession.EXPIRED, service.getSession("toby", started.sessionId().toString()).status());
@@ -155,10 +159,10 @@ class ToolchainServiceTest {
     }
 
     @Test
-    void agentTokenExpiresAfterFourHours() {
+    void agentTokenExpiresAfterItsConfiguredLifetime() {
         StartResponse started = service.start("toby", "git-village-hall");
         PairResponse paired = service.pair(started.pairingCode());
-        clock.advanceSeconds(4 * 3600 + 1);
+        clock.advanceSeconds(AGENT_TOKEN_LIFETIME.toSeconds() + 1);
 
         ResultsRequest request = new ResultsRequest("macos", null, List.of(new CheckEvidence("git", 0, "git version 2.39.5")));
         assertThrows(ResponseStatusException.class,
@@ -245,7 +249,7 @@ class ToolchainServiceTest {
         assertEquals(HttpStatus.CONFLICT, unpaired.getStatusCode());
 
         service.pair(started.pairingCode());
-        clock.advanceSeconds(4 * 3600 + 1);
+        clock.advanceSeconds(AGENT_TOKEN_LIFETIME.toSeconds() + 1);
         assertEquals(ToolchainSession.AGENT_EXPIRED, service.getSession("toby", id).status());
         assertThrows(ResponseStatusException.class, () -> service.requestCheck("toby", id, "editor-isle-tower"));
     }

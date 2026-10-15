@@ -49,6 +49,12 @@ public class ToolchainSessionMigration {
             } catch (DataAccessException e) {
                 // Already there.
             }
+            try {
+                // The old PAIRED status is now CHECKING; keep agents paired before the upgrade working.
+                jdbcTemplate.update("UPDATE toolchain_session SET status = 'CHECKING' WHERE status = 'PAIRED'");
+            } catch (DataAccessException e) {
+                logger.warn("Could not rename PAIRED Toolchain Trail sessions: {}", e.getMessage());
+            }
         };
     }
 }
