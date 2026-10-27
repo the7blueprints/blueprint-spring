@@ -89,7 +89,7 @@ public class GroupChatReadService {
     }
 
     private boolean isFrom(GroupChatMessage message, String displayName) {
-        return displayName != null && displayName.equals(message.getName());
+        return displayName != null && displayName.equals(message.getAuthor());
     }
 
     /**
